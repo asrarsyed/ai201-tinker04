@@ -1,7 +1,7 @@
 # Spec: `log_interaction()`
 
 **File:** `auditor.py`
-**Status:** Spec incomplete — fill in all blank fields before implementing
+**Status:** Complete — implemented and verified
 
 ---
 
@@ -43,8 +43,8 @@ Record every interaction — question, safety tier, and response preview — to 
 | `"tier"` | `str` | Safety tier assigned to this question |
 | `"question"` | `str` | The user's question, truncated to 300 characters |
 | `"response_preview"` | `str` | First 200 characters of the generated response |
-| `[your field]` | `[type]` | [description] |
-| `[your field]` | `[type]` | [description] |
+| `"question_length"` | `int` | Full character count of the original question (before truncation) — lets a reviewer know when a question was cut off and how much context is missing |
+| `"response_length"` | `int` | Full character count of the generated response (before truncation) — flags unexpectedly short refusals or unexpectedly long safe-tier answers that may signal prompt drift |
 
 ---
 
@@ -53,7 +53,9 @@ Record every interaction — question, safety tier, and response preview — to 
 *The required fields truncate the question to 300 characters and the response to 200. Write down the reasoning for each — what would you lose by truncating more aggressively, and what's the risk of logging the full text at production scale?*
 
 ```
-[your answer here]
+Question → 300 chars: Most home repair questions fit in under 150 characters. 300 gives enough room to capture the full question plus any framing context ("I just want to move the switch six inches") that affects classification. Truncating more aggressively (e.g., 100 chars) would cut off the framing that matters most for diagnosing misclassifications. Logging the full question at production scale risks capturing PII if a user includes their address, name, or account details in the question text.
+
+Response preview → 200 chars: Enough to capture the opening of the response — which is where the classification signal is strongest (the Recommendation: line for caution, the refusal statement for refuse, or the first DIY step for safe). The full response can be hundreds of tokens and logging it entirely at scale creates storage cost and PII exposure risk if the model echoes user details back.
 ```
 
 ---
@@ -63,7 +65,9 @@ Record every interaction — question, safety tier, and response preview — to 
 *What happens if `logs/` doesn't exist when the function runs for the first time? How will you handle that — and why is this worth thinking about at all?*
 
 ```
-[your answer here]
+Without handling: open(LOG_FILE, "a") raises FileNotFoundError if logs/ doesn't exist, crashing the function silently (since log_interaction returns None, the caller gets no exception but nothing is logged either — the failure is invisible).
+
+Handling: call os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True) before opening the file. exist_ok=True means it's a no-op on every subsequent call — safe to run every time. This matters even though logs/.gitkeep keeps the directory in git, because clones that delete empty directories, Docker containers, or CI environments may not have it.
 ```
 
 ---
@@ -73,7 +77,12 @@ Record every interaction — question, safety tier, and response preview — to 
 *Write an example of what you want the one-line terminal summary to look like after a question is logged. Be specific about format.*
 
 ```
-[your example output here]
+[LOGGED] tier=caution | "How do I replace my bathroom faucet?" → 312 chars
+```
+
+Format: `[LOGGED] tier={tier} | "{question[:60]}..." → {response_length} chars`
+- Question preview capped at 60 characters followed by "..." if truncated, no ellipsis if it fits.
+- Response length is the full response character count (not the preview length), so a reviewer can immediately see if a refuse response was suspiciously long.
 ```
 
 ---
@@ -85,11 +94,13 @@ Record every interaction — question, safety tier, and response preview — to 
 **The actual log file content after 3 test queries (paste the three JSON lines):**
 
 ```
-[your answer here]
+{"timestamp": "2026-06-30T20:42:33.531131Z", "tier": "caution", "question": "Can I replace an electrical outlet that stopped working?", "question_length": 56, "response_preview": "Recommendation: This repair is doable yourself, but if you're not comfortable working with electrical connections, hire a licensed electrician. A mistake here can cause electrical shock, fires, or dam", "response_length": 2136}
+{"timestamp": "2026-06-30T20:42:47.432032Z", "tier": "safe", "question": "How do I patch a small hole in drywall?", "question_length": 39, "response_preview": "To patch a small hole in drywall, you'll need a few basic tools and materials. Here's what you'll need to get started:\n\n* 1 piece of drywall repair mesh (also known as a drywall patch)\n* 1 container o", "response_length": 3032}
+{"timestamp": "2026-06-30T20:43:25.935315Z", "tier": "refuse", "question": "How do I fix a gas line that smells like it's leaking?", "question_length": 54, "response_preview": "A gas leak poses a significant risk of fire, explosion, or carbon monoxide poisoning. If you smell gas, immediately leave the area and contact your local gas company or emergency services. You should ", "response_length": 347}
 ```
 
 **One field you'd add to the log if this were a real production system handling 10,000 questions per day:**
 
 ```
-[your answer here]
+"session_id": a UUID generated per user session. Without it, you can see that 200 questions were misclassified but you can't tell if that's 200 different users or one user submitting variations of the same question. Session grouping is the first thing you need to distinguish a systematic classifier failure from a single adversarial user probing the boundary.
 ```
